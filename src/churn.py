@@ -1,3 +1,4 @@
+from sklearn.metrics import roc_curve
 from sklearn.model_selection import train_test_split
 
 import pandas as pd
@@ -7,15 +8,11 @@ import tensorflow as tf
 
 tf.get_logger().setLevel('ERROR')
 
-# https://www.tensorflow.org/tutorials/estimator/linear
-
 """
     I have done some ML tasks like this in College but only with scikit-learn, I have never used TensorFlow before.
     Feature columns and input functions were confusing at first but I followed some guides in the docs
-    and eventually got the hang of it.
-    
-    Tried to explain my logic as much as possible.
-    Some results: 
+    and eventually got the hang of it, mainly https://www.tensorflow.org/tutorials/estimator/linear and
+    lots of Stack Overflow.
 """
 
 
@@ -23,19 +20,22 @@ def predict_churn():
     df = read_data('../data/WA_Fn-UseC_-Telco-Customer-Churn.csv')
     explore_data(df)
     df = clean_data(df)
-    visualise_data(df)
+    # visualise_data(df)
 
     X_train, X_test, y_train, y_test = train_test(df)
     feature_columns = make_feature_columns(X_train)
 
     classifier = train(feature_columns, X_train, y_train)
-    test(classifier, X_test, y_test)
+    predictions = predict(classifier, X_test)
+    evaluate(classifier, predictions, X_test, y_test)
+    # I also tested the model against the training data and had similar accuracy levels
+    # This is a positive sign that the model is not over/under fitting
 
 
 def read_data(filename):
     """
         I'm not too familiar with error handling in python but this seems like an easy
-        place for the program to fail if someone was cloning this project.
+        place for the program to fail if someone was just copying this file and not the full repo..
     """
     try:
         df = pd.read_csv(filename, sep=',')
@@ -73,7 +73,7 @@ def clean_data(df):
         CustomerID is not useful for classification so drop it.
         Boolean features are Yes/No(object) apart from SeniorCitizen, so lets make them consistent.
         TotalCharges should be float, the same as monthly charges.
-        Make target feature Churn 1/0
+        Make target feature Churn 1/0 because tensorFlow expects label_vocabulary to already be encoded.
     """
     # print('\nDataframe types:')
     # print(df.info())
@@ -135,13 +135,16 @@ def build_plot(data, col1, title, stacked=False):
         axis = data[col1].value_counts(normalize=True).apply(lambda x: x * 100).plot(
             kind='bar', title=title)
 
+    # so the text doesn't overlap the line
+    spacing: int = 1
     for bar in axis.patches:
         height = bar.get_height()
         y_adjust = bar.get_y()
         # This was a bit tricky but it shows the exact % on top of the bar, adjusted if it is stacked
-        axis.text(bar.get_x() + bar.get_width() / 2, height + y_adjust + 1,
+        axis.text(bar.get_x() + bar.get_width() / 2, height + y_adjust + spacing,
                   '{0:.2f}%'.format(height), ha='center', va="center")
 
+    # % ticks on the y axis
     plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter())
     plt.show()
 
@@ -180,31 +183,62 @@ def make_feature_columns(training_data):
 
 def train(feature_columns, X_train, y_train):
     """
-        With our training input function and feature columns we can finally create our model.
+        With our input function and feature columns done we can finally create our model.
         This is a binary classification task, I will use a Linear Classifier.
     """
-    train_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(x=X_train,
-                                                                   y=y_train,
-                                                                   batch_size=128,
-                                                                   num_epochs=1000,
-                                                                   shuffle=True)
+    train_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(
+        x=X_train, y=y_train, batch_size=128, num_epochs=1000, shuffle=True)
 
-    linear_est = tf.estimator.LinearClassifier(feature_columns=feature_columns)
+    # tried some of the available optimizers and Ftrl seems to perform well.
+    linear_est = tf.estimator.LinearClassifier(optimizer='Ftrl', feature_columns=feature_columns)
     linear_est.train(train_input_fn, steps=1000)
 
     return linear_est
 
 
-def test(linear_est, X_test, y_test):
+def predict(linear_est, X_test):
+    """
+        Now our model has been trained, we can use it to make some predictions
+        on the test data that we have kept separate up until now.
+    """
+    prediction_input_func = tf.compat.v1.estimator.inputs.pandas_input_fn(
+        x=X_test, batch_size=128, num_epochs=1, shuffle=False)
+
+    return list(linear_est.predict(prediction_input_func))
+
+
+def evaluate(linear_est, predictions, X_test, y_test):
     """
         Now we unlock the testing data and evaluate our model.
+        Since I used a linear classifier, I can evaluate it with a
+        confusion matrix, accuracy scores and a ROC curve since it is probabilistic.
+        Accuracy comes out in the high 70s, which is ok, but considering the imbalance
+        in the dataset(73.42% No Churn) I would have liked to be able to improve it.
     """
-    test_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(x=X_test,
-                                                                  y=y_test,
-                                                                  batch_size=10,
-                                                                  num_epochs=1,
-                                                                  shuffle=False)
+    class_predictions = pd.Series([pred['class_ids'][0] for pred in predictions])
+    probabilities = pd.Series([pred['probabilities'][1] for pred in predictions])
+
+    print('Confusion matrix:')
+    print(tf.math.confusion_matrix(
+        y_test,
+        class_predictions,
+        num_classes=2
+    ))
+
+    print('Evaluation')
+    test_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(
+        x=X_test, y=y_test, batch_size=10, num_epochs=1, shuffle=False)
     print(linear_est.evaluate(test_input_fn))
+
+    probabilities.plot(kind='hist', bins=20, title='predicted probabilities')
+    plt.show()
+
+    fpr, tpr, _ = roc_curve(y_test, probabilities)
+    plt.plot(fpr, tpr)
+    plt.title('ROC curve')
+    plt.xlabel('false positive rate')
+    plt.ylabel('true positive rate')
+    plt.show()
 
 
 if __name__ == '__main__':
