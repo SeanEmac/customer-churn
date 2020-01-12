@@ -10,7 +10,7 @@ tf.get_logger().setLevel('ERROR')
 
 """
     I have done some ML tasks like this in College but only with scikit-learn, I have never used TensorFlow before.
-    Feature columns and input functions were confusing at first but I followed some guides in the docs
+    Feature columns and input functions were confusing at first but I followed some guides from the docs
     and eventually got the hang of it, mainly https://www.tensorflow.org/tutorials/estimator/linear and
     lots of Stack Overflow.
 """
@@ -20,12 +20,13 @@ def predict_churn():
     df = read_data('../data/WA_Fn-UseC_-Telco-Customer-Churn.csv')
     explore_data(df)
     df = clean_data(df)
-    # visualise_data(df)
+    visualise_data(df)
 
+    # Split data into training and test
     X_train, X_test, y_train, y_test = train_test(df)
     feature_columns = make_feature_columns(X_train)
-
     classifier = train(feature_columns, X_train, y_train)
+
     predictions = predict(classifier, X_test)
     evaluate(classifier, predictions, X_test, y_test)
     # I also tested the model against the training data and had similar accuracy levels
@@ -35,7 +36,7 @@ def predict_churn():
 def read_data(filename):
     """
         I'm not too familiar with error handling in python but this seems like an easy
-        place for the program to fail if someone was just copying this file and not the full repo..
+        place for the program to fail if someone was just copying this file and not the full repo.
     """
     try:
         df = pd.read_csv(filename, sep=',')
@@ -75,20 +76,19 @@ def clean_data(df):
         TotalCharges should be float, the same as monthly charges.
         Make target feature Churn 1/0 because tensorFlow expects label_vocabulary to already be encoded.
     """
-    # print('\nDataframe types:')
-    # print(df.info())
+    print('\nDataframe types:')
+    print(df.info())
     df.drop('customerID', axis=1, inplace=True)
     df['SeniorCitizen'] = df['SeniorCitizen'].apply(lambda x: 'Yes' if x == 1 else 'No')
     df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
 
-    # print('\nMissing values:')
-    # print(df.isnull().sum())
+    print('\nMissing values:')
+    print(df.isnull().sum())
     """
-        11 missing values from TotalCharges, we can either drop these rows
-        or compute the value MonthlyCharges * tenure. On second look, that computation is wrong,
-        perhaps monthly charges vary month to month. Lets just drop these rows and
-        return the cleaned data set.
+        11 missing values from TotalCharges, we can either drop these rows or compute 
+        the value MonthlyCharges * tenure. On second look, that computation is wrong,
+        perhaps monthly charges vary month to month. Lets just drop these rows and return the cleaned data set.
     """
     df = df.dropna()
 
@@ -117,25 +117,25 @@ def visualise_data(df):
     build_plot(df, 'SeniorCitizen', 'Churn in Senior citizens', stacked=True)
     # As I suspected, month to month contracts are much more likely to churn
     build_plot(df, 'Contract', 'Churn by contract', stacked=True)
-    # 62% of new customers are leaving after the first month, this is a bad sign
+    # 62% of customers are leaving after the first month, this is a bad sign
     build_plot(df, 'tenure', 'Churn by tenure', stacked=True)
 
 
-def build_plot(data, col1, title, stacked=False):
+def build_plot(data, feature, title, stacked=False):
     """
-        We can either build Singe bar charts or stacked bar charts.
+        We can either build Singe bar charts or stacked bar charts.Use matplotlib for this.
         Single: each bar represents a value from that column expressed as a % of the total.
-        Stacked: shows the effect of a features value on churn, again as a % of total, so that for example
+        Stacked: compares the churn rate of each feature value, again as a % of total, so that for example
         we can compare the churn % in Males vs Females.
     """
     if stacked:
-        axis = data.groupby([col1, 'Churn']).size().unstack().apply(lambda x: (x / x.sum()) * 100, axis=1).plot(
+        axis = data.groupby([feature, 'Churn']).size().unstack().apply(lambda x: (x / x.sum()) * 100, axis=1).plot(
             kind='bar', title=title, stacked=True)
     else:
-        axis = data[col1].value_counts(normalize=True).apply(lambda x: x * 100).plot(
+        axis = data[feature].value_counts(normalize=True).apply(lambda x: x * 100).plot(
             kind='bar', title=title)
 
-    # so the text doesn't overlap the line
+    # so the text doesn't overlap the bar
     spacing: int = 1
     for bar in axis.patches:
         height = bar.get_height()
@@ -187,7 +187,7 @@ def train(feature_columns, X_train, y_train):
         This is a binary classification task, I will use a Linear Classifier.
     """
     train_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(
-        x=X_train, y=y_train, batch_size=128, num_epochs=1000, shuffle=True)
+        x=X_train, y=y_train, batch_size=32, num_epochs=100, shuffle=True)
 
     # tried some of the available optimizers and Ftrl seems to perform well.
     linear_est = tf.estimator.LinearClassifier(optimizer='Ftrl', feature_columns=feature_columns)
@@ -202,7 +202,7 @@ def predict(linear_est, X_test):
         on the test data that we have kept separate up until now.
     """
     prediction_input_func = tf.compat.v1.estimator.inputs.pandas_input_fn(
-        x=X_test, batch_size=128, num_epochs=1, shuffle=False)
+        x=X_test, batch_size=32, num_epochs=1, shuffle=False)
 
     return list(linear_est.predict(prediction_input_func))
 
@@ -212,7 +212,7 @@ def evaluate(linear_est, predictions, X_test, y_test):
         Now we unlock the testing data and evaluate our model.
         Since I used a linear classifier, I can evaluate it with a
         confusion matrix, accuracy scores and a ROC curve since it is probabilistic.
-        Accuracy comes out in the high 70s, which is ok, but considering the imbalance
+        Accuracy comes out around 77-80%, which is ok, but considering the imbalance
         in the dataset(73.42% No Churn) I would have liked to be able to improve it.
     """
     class_predictions = pd.Series([pred['class_ids'][0] for pred in predictions])
@@ -225,14 +225,15 @@ def evaluate(linear_est, predictions, X_test, y_test):
         num_classes=2
     ))
 
-    print('Evaluation')
+    print('Evaluation:')
     test_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(
         x=X_test, y=y_test, batch_size=10, num_epochs=1, shuffle=False)
     print(linear_est.evaluate(test_input_fn))
 
-    probabilities.plot(kind='hist', bins=20, title='predicted probabilities')
+    probabilities.plot(kind='hist', bins=10, title='Predicted Probabilities')
     plt.show()
 
+    # ROC curve shows tpr vs fpr as the threshold is varied.
     fpr, tpr, _ = roc_curve(y_test, probabilities)
     plt.plot(fpr, tpr)
     plt.title('ROC curve')
