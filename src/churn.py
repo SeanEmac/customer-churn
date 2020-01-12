@@ -1,29 +1,49 @@
+from sklearn.model_selection import train_test_split
+
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import tensorflow as tf
+
+tf.get_logger().setLevel('ERROR')
+
 # https://www.tensorflow.org/tutorials/estimator/linear
 
-from sklearn.model_selection import train_test_split
+"""
+    I have done some ML tasks like this in College but only with scikit-learn, I have never used TensorFlow before.
+    Feature columns and input functions were confusing at first but I followed some guides in the docs
+    and eventually got the hang of it.
+    
+    Tried to explain my logic as much as possible.
+    Some results: 
+"""
 
 
 def predict_churn():
-    df = read_data()
-    # explore_data(df)
+    df = read_data('../data/WA_Fn-UseC_-Telco-Customer-Churn.csv')
+    explore_data(df)
     df = clean_data(df)
-    # visualise_data(df)
+    visualise_data(df)
 
     X_train, X_test, y_train, y_test = train_test(df)
-
     feature_columns = make_feature_columns(X_train)
 
     classifier = train(feature_columns, X_train, y_train)
     test(classifier, X_test, y_test)
 
 
-def read_data():
-    df = pd.read_csv('../data/WA_Fn-UseC_-Telco-Customer-Churn.csv', sep=',')
+def read_data(filename):
+    """
+        I'm not too familiar with error handling in python but this seems like an easy
+        place for the program to fail if someone was cloning this project.
+    """
+    try:
+        df = pd.read_csv(filename, sep=',')
+        return df
 
-    return df
+    except Exception:
+        print("Error reading input CSV", filename)
+        raise
 
 
 def explore_data(df):
@@ -41,24 +61,28 @@ def explore_data(df):
     # Print out a summary of the features
     for feature in features:
         if df[feature].dtype.name == 'object':
-            print('\t- {}: {}'.format(feature, df[feature].unique()))
+            print('- {}: {}'.format(feature, df[feature].unique()))
         else:
-            print('\t- {}: Continuous'.format(feature))
+            print('- {}: Continuous'.format(feature))
+
+    # Senior Citizen & Total Charges are incorrectly typed
 
 
 def clean_data(df):
-    # print(df.info())
     """
         CustomerID is not useful for classification so drop it.
         Boolean features are Yes/No(object) apart from SeniorCitizen, so lets make them consistent.
         TotalCharges should be float, the same as monthly charges.
         Make target feature Churn 1/0
     """
+    # print('\nDataframe types:')
+    # print(df.info())
     df.drop('customerID', axis=1, inplace=True)
     df['SeniorCitizen'] = df['SeniorCitizen'].apply(lambda x: 'Yes' if x == 1 else 'No')
     df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
 
+    # print('\nMissing values:')
     # print(df.isnull().sum())
     """
         11 missing values from TotalCharges, we can either drop these rows
@@ -72,7 +96,53 @@ def clean_data(df):
 
 
 def visualise_data(df):
-    df['Churn'].value_counts().plot(kind='bar', x='Churn', y='count', title='Pos/Neg examples')
+    """
+        I won't plot every feature, just have a look at some I think might be interesting,
+        I will comment any insights gained from the visualisations.
+    """
+    # Plot some features on their own to look at distribution
+    # 26.58% of customers churn, slight imbalance but it's not too extreme
+    build_plot(df, 'Churn', 'Customer Churn')
+    # 16.24% of customers are senior citizens, they could be less likely to churn? Will check later.
+    build_plot(df, 'SeniorCitizen', 'Senior citizen')
+    # 50.5% males
+    build_plot(df, 'gender', 'Gender')
+    # 8.72% of customers have only joined in the last month, lots of new customers.
+    build_plot(df, 'tenure', 'Tenure')
+    # 55% are on a month to month contract, high risk, could churn at any time.
+    build_plot(df, 'Contract', 'Contract')
+
+    # Compare some features and their effect on churn
+    # Senior citizens are actually more likely to churn, this was surprising
+    build_plot(df, 'SeniorCitizen', 'Churn in Senior citizens', stacked=True)
+    # As I suspected, month to month contracts are much more likely to churn
+    build_plot(df, 'Contract', 'Churn by contract', stacked=True)
+    # 62% of new customers are leaving after the first month, this is a bad sign
+    build_plot(df, 'tenure', 'Churn by tenure', stacked=True)
+
+
+def build_plot(data, col1, title, stacked=False):
+    """
+        We can either build Singe bar charts or stacked bar charts.
+        Single: each bar represents a value from that column expressed as a % of the total.
+        Stacked: shows the effect of a features value on churn, again as a % of total, so that for example
+        we can compare the churn % in Males vs Females.
+    """
+    if stacked:
+        axis = data.groupby([col1, 'Churn']).size().unstack().apply(lambda x: (x / x.sum()) * 100, axis=1).plot(
+            kind='bar', title=title, stacked=True)
+    else:
+        axis = data[col1].value_counts(normalize=True).apply(lambda x: x * 100).plot(
+            kind='bar', title=title)
+
+    for bar in axis.patches:
+        height = bar.get_height()
+        y_adjust = bar.get_y()
+        # This was a bit tricky but it shows the exact % on top of the bar, adjusted if it is stacked
+        axis.text(bar.get_x() + bar.get_width() / 2, height + y_adjust + 1,
+                  '{0:.2f}%'.format(height), ha='center', va="center")
+
+    plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter())
     plt.show()
 
 
@@ -80,11 +150,12 @@ def train_test(df):
     """
         Independent features X, Dependent feature y.
         Reserve 30% of the data for testing and the remaining 70% for training.
-        Could plot a learning curve here to evaluate the effect of test_size on accuracy.
+        Later on I might use 10 fold cross validation for a more accurate score.
+        Could plot a learning curve to evaluate the effect of test_size on accuracy.
     """
     X = df.drop('Churn', axis=1)
     y = df['Churn']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3)
 
     return X_train, X_test, y_train, y_test
 
@@ -92,44 +163,34 @@ def train_test(df):
 def make_feature_columns(training_data):
     """
         Feature columns describe how the model should interpret the raw input features.
-        Here we only use the base features, no derived features. Categorical features
-        mapped with their categories. Numeric features as a tensor flow float.
+        Here we only use the base features, no derived features.
+        categorical_column_with_vocabulary in a way, changes the String values in our dataframe
+        into a discrete set of categorical values. Numeric_column for continuous values.
     """
     feature_columns = []
-
     for feature in training_data:
         if training_data[feature].dtype.name == 'object':
             vocabulary = training_data[feature].unique()
             feature_columns.append(tf.feature_column.categorical_column_with_vocabulary_list(feature, vocabulary))
         else:
-            feature_columns.append(tf.feature_column.numeric_column(feature, dtype=tf.float32))
+            feature_columns.append(tf.feature_column.numeric_column(feature))
 
     return feature_columns
 
 
-def make_input_fn(data_df, label_df, num_epochs=10, shuffle=True, batch_size=32):
-    """
-        Input function converts our dataframe into a tensor flow DataSet
-    """
-    def input_function():
-        dataset = tf.data.Dataset.from_tensor_slices((dict(data_df), label_df))
-        if shuffle:
-            dataset = dataset.shuffle(1000)
-        dataset = dataset.batch(batch_size).repeat(num_epochs)
-        return dataset
-
-    return input_function
-
-
 def train(feature_columns, X_train, y_train):
     """
-        With our training input function and feature columns we can finally create
-        the linear classifier and train it.
+        With our training input function and feature columns we can finally create our model.
+        This is a binary classification task, I will use a Linear Classifier.
     """
-    train_input_fn = make_input_fn(X_train, y_train)
+    train_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(x=X_train,
+                                                                   y=y_train,
+                                                                   batch_size=128,
+                                                                   num_epochs=1000,
+                                                                   shuffle=True)
 
     linear_est = tf.estimator.LinearClassifier(feature_columns=feature_columns)
-    linear_est.train(train_input_fn)
+    linear_est.train(train_input_fn, steps=1000)
 
     return linear_est
 
@@ -138,10 +199,13 @@ def test(linear_est, X_test, y_test):
     """
         Now we unlock the testing data and evaluate our model.
     """
-    eval_input_fn = make_input_fn(X_test, y_test, num_epochs=1, shuffle=False)
-    print(linear_est.evaluate(eval_input_fn))
+    test_input_fn = tf.compat.v1.estimator.inputs.pandas_input_fn(x=X_test,
+                                                                  y=y_test,
+                                                                  batch_size=10,
+                                                                  num_epochs=1,
+                                                                  shuffle=False)
+    print(linear_est.evaluate(test_input_fn))
 
 
 if __name__ == '__main__':
-    print('Predicting Customer Churn')
     predict_churn()
